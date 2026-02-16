@@ -1,0 +1,44 @@
+name: Hourly Insider Scan
+
+# This section tells GitHub WHEN to run
+on:
+  schedule:
+    - cron: '0 * * * *'  # This is code for "At the start of every hour"
+  workflow_dispatch:      # This adds a "Play" button so you can run it manually
+
+# This section tells GitHub WHAT to do
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Open your "Folder"
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. Setup a computer with Python installed
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. Install the tools we need (pandas, yfinance, etc.)
+      - name: Install dependencies
+        run: |
+          pip install pandas yfinance requests lxml
+
+      # 4. Run your "Brain" script using the Secret Keys from Step 2
+      - name: Run scanner
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python scanner.py
+
+      # 5. Save the "Seen Trades" list so you don't get double emails
+      - name: Save history
+        run: |
+          git config --global user.name 'Scanner Bot'
+          git config --global user.email 'bot@bot.com'
+          git add seen_trades.csv || exit 0
+          git commit -m "Update seen trades" || exit 0
+          git push
