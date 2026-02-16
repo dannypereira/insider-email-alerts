@@ -38,7 +38,8 @@ def get_trades():
     try:
         response = requests.get(url, params=params, headers=headers)
         # Convert the website table into a data list
-        df = pd.read_html(response.text)[-1]
+        from io import StringIO
+df = pd.read_html(StringIO(response.text))[-1]
         df.columns = [c.replace(' ', '_').lower() for c in df.columns]
         
         # Filter: Must be 'P - Purchase', over $50k, and after Feb 1, 2026
