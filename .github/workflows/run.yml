@@ -32,7 +32,7 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-        run: python scanner.py
+        run: python insider_bot.py
 
       # 5. Save the "Seen Trades" list so you don't get double emails
       - name: Save history
