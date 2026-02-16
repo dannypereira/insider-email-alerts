@@ -1,4 +1,3 @@
 pandas
-yfinance
-requests
 lxml
+cloudscraper
