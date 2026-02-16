@@ -2,34 +2,33 @@ import os
 import pandas as pd
 import smtplib
 import time
+import io
 from email.message import EmailMessage
 from curl_cffi import requests
 from datetime import datetime
 
-# --- CONFIGURATION ---
+# --- CONFIG ---
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 RECEIVER = os.environ.get("RECEIVER_EMAIL")
 
 def get_trade_id(row):
-    # This creates a unique fingerprint for the trade
     return f"{row['Ticker']}_{row['Insider Name']}_{row['Value']}".replace(" ", "_")
 
-def send_email(trade_data):
+def send_summary_email(trades_list):
+    """Sends one email containing all new trades found in this scan."""
+    print(f"📧 Sending summary email for {len(trades_list)} trades...")
+    
+    # Build the email body text
+    body = "🚨 NEW INSIDER TRADES DETECTED 🚨\n\n"
+    for t in trades_list:
+        body += f"🔹 {t['Ticker']} | {t['Insider Name']} | {t['Trade Type']} | {t['Value']}\n"
+        body += f"   Link: https://openinsider.com/{t['Ticker']}\n"
+        body += "-------------------------------------------\n"
+    
     msg = EmailMessage()
-    msg.set_content(f"""
-    🚨 NEW INSIDER TRADE DETECTED 🚨
-    
-    Ticker: {trade_data['Ticker']}
-    Insider: {trade_data['Insider Name']} ({trade_data['Title']})
-    Trade Type: {trade_data['Trade Type']}
-    Price: {trade_data['Price']}
-    Value: {trade_data['Value']}
-    
-    View here: https://openinsider.com/{trade_data['Ticker']}
-    """)
-    
-    msg['Subject'] = f"🔥 Insider Buy: {trade_data['Ticker']} ({trade_data['Value']})"
+    msg.set_content(body)
+    msg['Subject'] = f"🔥 Insider Alert: {len(trades_list)} New Trades Found"
     msg['From'] = EMAIL_USER
     msg['To'] = RECEIVER
 
@@ -37,73 +36,61 @@ def send_email(trade_data):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(EMAIL_USER, EMAIL_PASS)
             smtp.send_message(msg)
-        print(f"✅ Email sent for {trade_data['Ticker']}")
+        print("✅ Summary email sent!")
     except Exception as e:
-        print(f"❌ Email failed: {e}")
+        print(f"❌ EMAIL ERROR: {e}")
 
 def monitor():
-    url = "https://openinsider.com/insider-transactions-25k"
+    url = "http://openinsider.com/insider-transactions-25k"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-    # --- SMARTER MEMORY LOADING ---
+    # 1. Load Memory
     seen_ids = set()
     if os.path.exists("seen_trades.csv"):
         try:
             seen_df = pd.read_csv("seen_trades.csv")
-            if 'trade_id' in seen_df.columns:
-                seen_ids = set(seen_df['trade_id'].astype(str).tolist())
-            else:
-                print("⚠️ Memory file was malformed. Starting fresh.")
-        except Exception:
-            print("⚠️ Could not read memory file. Starting fresh.")
+            seen_ids = set(seen_df['trade_id'].astype(str).tolist())
+        except:
+            pass
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Fetching OpenInsider...")
 
     try:
-        # Use curl_cffi to bypass blocks
         response = requests.get(url, headers=headers, impersonate="chrome110", timeout=30)
         
         if response.status_code == 200:
-            # OpenInsider's main data is usually the only large table
-            dfs = pd.read_html(response.text)
-            # We look for the dataframe that has 'Ticker' in it
-            df = None
-            for d in dfs:
-                if 'Ticker' in d.columns:
-                    df = d
-                    break
+            dfs = pd.read_html(io.StringIO(response.text), match="Ticker")
+            df = dfs[0]
             
-            if df is None:
-                print("❌ Could not find the data table on the page.")
-                return
+            new_trades_to_report = []
+            new_ids_for_csv = []
 
-            new_entries = []
-            # Check the top 5 most recent trades
-            for _, row in df.head(5).iterrows():
+            # 2. Collect all new trades from the top 20 rows
+            for _, row in df.head(20).iterrows():
                 tid = get_trade_id(row)
-                
                 if tid not in seen_ids:
-                    print(f"✨ NEW: {row['Ticker']} by {row['Insider Name']}")
-                    send_email(row)
-                    new_entries.append({"trade_id": tid, "date_added": datetime.now()})
+                    new_trades_to_report.append(row)
+                    new_ids_for_csv.append({"trade_id": tid, "date": datetime.now()})
                     seen_ids.add(tid)
 
-            # --- SAVE MEMORY ---
-            if new_entries:
-                new_df = pd.DataFrame(new_entries)
-                # Append to file, create header only if file doesn't exist
-                file_exists = os.path.isfile("seen_trades.csv")
-                new_df.to_csv("seen_trades.csv", mode='a', index=False, header=not file_exists)
-                print(f"💾 Saved {len(new_entries)} new trades to memory.")
+            # 3. If we found anything new, send ONE email and update CSV
+            if new_trades_to_report:
+                send_summary_email(new_trades_to_report)
+                
+                # Update memory file
+                mem_df = pd.DataFrame(new_ids_for_csv)
+                mem_df.to_csv("seen_trades.csv", mode='a', index=False, header=not os.path.exists("seen_trades.csv"))
+            else:
+                print("😴 No new trades found.")
         else:
-            print(f"🚫 Blocked! Status: {response.status_code}")
+            print(f"🚫 Status {response.status_code}")
 
     except Exception as e:
-        print(f"⚠️ Error: {e}")
+        print(f"⚠️ ERROR: {e}")
 
 # --- RUN LOOP ---
 start_time = time.time()
-# Run for ~5.5 hours then stop (so GitHub can restart a fresh one)
 while (time.time() - start_time) < 20000:
     monitor()
-    time.sleep(300) # 5 minutes
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💤 Waiting 5 minutes...")
+    time.sleep(300)
