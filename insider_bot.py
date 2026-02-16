@@ -6,7 +6,8 @@ from email.message import EmailMessage
 from curl_cffi import requests
 
 # --- CONFIGURATION ---
-URL = "http://openinsider.com/insider-transactions-25k"
+# Switched to HTTPS for better security/compatibility
+URL = "https://openinsider.com/insider-transactions-25k"
 CSV_FILE = "seen_trades.csv"
 
 # Environment Variables from GitHub Secrets
@@ -28,42 +29,64 @@ def send_email(subject, body):
 def run_scanner():
     print("--- STARTING SCAN ---")
     
-    # Using curl_cffi to impersonate a Chrome browser
+    # Enhanced headers to look like a genuine user session
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://openinsider.com/",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
     
     try:
-        print("Step 1: Contacting OpenInsider via curl_cffi...")
-        response = requests.get(URL, headers=headers, impersonate="chrome110")
+        print(f"Step 1: Contacting {URL}...")
+        # Using chrome110 impersonation which is very stable
+        response = requests.get(URL, headers=headers, impersonate="chrome110", timeout=30)
         
+        print(f"Status Code: {response.status_code}")
+        
+        if "Table" not in response.text and "Ticker" not in response.text:
+            print("⚠️ WARNING: Table keywords not found in response.")
+            print("--- HTML SNIPPET (DEBUG) ---")
+            print(response.text[:1000]) # See what the site actually sent us
+            print("--- END SNIPPET ---")
+
         print("Step 2: Parsing table...")
-        # We look for the table containing 'Ticker' to avoid layout garbage
-        tables = pd.read_html(StringIO(response.text), match="Ticker")
+        tables = pd.read_html(StringIO(response.text))
         
+        # OpenInsider's main data table is usually the one with the most rows
         if not tables:
-            print("💥 CRITICAL ERROR: No tables found. Site layout might have changed.")
+            print("💥 CRITICAL ERROR: No tables found at all.")
             return
 
-        df = tables[0]
+        # Find the table that actually contains trade data
+        df = None
+        for t in tables:
+            if 'Ticker' in t.columns:
+                df = t
+                break
         
-        # Clean up column names (OpenInsider sometimes has weird spacing)
+        if df is None:
+            print("💥 ERROR: Found tables, but none contained 'Ticker' column.")
+            return
+
+        # Clean up column names
         df.columns = [str(c).replace('\xa0', ' ') for c in df.columns]
         
-        # We only care about the core columns
-        # OpenInsider cols: ['X', 'Filing Date', 'Trade Date', 'Ticker', 'Company Name', 'Insider Name', 'Title', 'Trade Type', 'Price', 'Qty', 'Owned', 'ΔOwn', 'Value']
         relevant_cols = ['Filing Date', 'Ticker', 'Insider Name', 'Title', 'Trade Type', 'Price', 'Qty', 'Value']
         df = df[relevant_cols]
 
-        # Step 3: Load or create the 'seen trades' database
+        # Step 3: Deduplication Logic
         if os.path.exists(CSV_FILE):
-            seen_df = pd.read_csv(CSV_FILE)
+            try:
+                seen_df = pd.read_csv(CSV_FILE)
+            except:
+                seen_df = pd.DataFrame(columns=relevant_cols)
         else:
             seen_df = pd.DataFrame(columns=relevant_cols)
-            seen_df.to_csv(CSV_FILE, index=False)
 
-        # Step 4: Identify NEW trades
-        # We create a unique ID by combining Filing Date, Ticker, and Value
+        # Create unique IDs
         df['temp_id'] = df['Filing Date'].astype(str) + df['Ticker'] + df['Value'].astype(str)
         seen_ids = (seen_df['Filing Date'].astype(str) + seen_df['Ticker'] + seen_df['Value'].astype(str)).tolist()
         
@@ -72,24 +95,18 @@ def run_scanner():
 
         if not new_trades.empty:
             print(f"🎯 Found {len(new_trades)} new trades!")
-            
-            # Prepare Email Content
-            email_body = "New Insider Trades Detected:\n\n"
-            email_body += new_trades.to_string(index=False)
-            
+            email_body = "New Insider Trades Detected:\n\n" + new_trades.to_string(index=False)
             send_email(f"🚨 Insider Alert: {len(new_trades)} New Trades", email_body)
             
-            # Update the CSV so we don't alert on these again
-            updated_df = pd.concat([new_trades, seen_df]).head(500) # Keep last 500
+            updated_df = pd.concat([new_trades, seen_df]).head(500)
             updated_df.to_csv(CSV_FILE, index=False)
         else:
-            print("😴 No new trades found since last scan.")
+            print("😴 No new trades found.")
 
     except Exception as e:
         print(f"💥 ERROR: {e}")
-        # Ensure the file exists even on failure so Git doesn't complain
         if not os.path.exists(CSV_FILE):
-            pd.DataFrame().to_csv(CSV_FILE)
+            pd.DataFrame().to_csv(CSV_FILE, index=False)
 
     print("--- SCAN FINISHED ---")
 
