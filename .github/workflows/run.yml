@@ -1,48 +1,35 @@
-name: Insider Trader Scanner
-
+name: 5-Minute Insider Bot
 on:
   schedule:
-    # Runs every 2 hours (adjust as needed)
-    - cron: '0 */2 * * *'
-  workflow_dispatch: # Allows you to run it manually for testing
+    - cron: '0 */6 * * *' # Restarts every 6 hours
+  workflow_dispatch:      # Allows you to start it manually
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Crucial: This gives the bot permission to push the CSV back to your repo
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: Install Dependencies
-        run: |
-          pip install pandas yfinance requests lxml html5lib curl_cffi
+      - name: Install Packages
+        run: pip install pandas curl_cffi lxml html5lib
 
-      - name: Run Insider Bot
+      - name: Run Bot
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         run: python insider_bot.py
 
-      - name: Commit and Push Changes
+      - name: Save Memory (Commit CSV)
         run: |
-          git config --global user.name "Scanner Bot"
-          git config --global user.email "bot@openinsider.com"
-          
-          # Check if the file exists and has changes
-          if [ -f seen_trades.csv ]; then
-            git add seen_trades.csv
-            # Only commit if there are actual changes to the file
-            git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen trades [skip ci]" && git push)
-          else
-            echo "No CSV file found to commit."
-          fi
+          git config --global user.name "InsiderBot"
+          git config --global user.email "bot@example.com"
+          git add seen_trades.csv
+          git commit -m "Update seen trades" || exit 0
+          git push
