@@ -1,43 +1,48 @@
-name: Hourly Insider Scan
+name: Insider Trader Scanner
 
-# This section tells GitHub WHEN to run
 on:
   schedule:
-    - cron: '0 * * * *'  # This is code for "At the start of every hour"
-  workflow_dispatch:      # This adds a "Play" button so you can run it manually
+    # Runs every 2 hours (adjust as needed)
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # Allows you to run it manually for testing
 
-# This section tells GitHub WHAT to do
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      # 1. Open your "Folder"
-      - name: Checkout code
-        uses: actions/checkout@v3
+    # Crucial: This gives the bot permission to push the CSV back to your repo
+    permissions:
+      contents: write
 
-      # 2. Setup a computer with Python installed
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      # 3. Install the tools we need (pandas, yfinance, etc.)
-      - name: Install dependencies
-        run: pip install pandas yfinance requests lxml html5lib
+      - name: Install Dependencies
+        run: |
+          pip install pandas yfinance requests lxml html5lib curl_cffi
 
-      # 4. Run your "Brain" script using the Secret Keys from Step 2
-      - name: Run scanner
+      - name: Run Insider Bot
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         run: python insider_bot.py
 
-      # 5. Save the "Seen Trades" list so you don't get double emails
-      - name: Save history
+      - name: Commit and Push Changes
         run: |
-          git config --global user.name 'Scanner Bot'
-          git config --global user.email 'bot@bot.com'
-          git add seen_trades.csv || exit 0
-          git commit -m "Update seen trades" || exit 0
-          git push
+          git config --global user.name "Scanner Bot"
+          git config --global user.email "bot@openinsider.com"
+          
+          # Check if the file exists and has changes
+          if [ -f seen_trades.csv ]; then
+            git add seen_trades.csv
+            # Only commit if there are actual changes to the file
+            git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen trades [skip ci]" && git push)
+          else
+            echo "No CSV file found to commit."
+          fi
